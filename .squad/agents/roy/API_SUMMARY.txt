@@ -1,0 +1,104 @@
+================================================================================
+STASHAPP GRAPHQL API SUMMARY FOR SCENE DELETION PLUGIN
+Generated: 2026-05-05T08:17:09+02:00 by Roy (API Explorer)
+Updated:   2026-05-05T08:32:00+02:00 — LIVE QUERY CORRECTIONS APPLIED
+================================================================================
+
+⚠️  CORRECTION: o_counter ≠ play count (previous version was WRONG)
+    o_counter   = orgasm counter (how many times O button was clicked)
+    play_count  = how many times scene was played/watched
+
+CRITICAL FIELDS FOR DELETION DECISIONS:
+─────────────────────────────────────────
+1. play_count (Int)          — Times scene was PLAYED/WATCHED  ← PRIMARY metric
+2. o_counter (Int)           — Orgasm counter (SEPARATE from play count)
+3. rating100 (Int)           — User rating 0-100 (null = unrated)
+4. last_played_at (Time)     — When last viewed; null = never played
+5. created_at (Time)         — When added to library
+6. files[].size (Int64)      — Disk space in bytes (note: Int64, not Int)
+7. files[].duration (Float)  — Video length in seconds
+8. play_duration (Float)     — Cumulative seconds the scene has been playing
+9. resume_time (Float)       — Last seek position (partially watched indicator)
+
+QUERY ENTRY POINTS:
+────────────────────
+• findScenes(filter, scene_filter)  → Returns paginated Scene list
+• findScene(id)                     → Returns single Scene by ID
+
+DELETION MUTATION:
+──────────────────
+  mutation { sceneDestroy(id: $sceneId) }  ⚠️ DESTRUCTIVE — NO UNDO
+
+EXAMPLE DELETION CRITERIA (ready-to-use patterns):
+──────────────────────────────────────────────────
+⚠️  USE play_count (not o_counter) for "how many times watched"
+
+Criterion A: Unrated + Rarely Played
+  is_missing: "rating"
+  play_count: { value: 2, modifier: LESS_THAN }
+  NOTE: Use is_missing:"rating" — rating100 < 1 does NOT match null values
+
+Criterion B: Never Played + Unrated
+  play_count: { value: 0, modifier: EQUALS }
+  is_missing: "rating"
+
+Criterion C: Unwatched for 30+ Days (includes never-played)
+  last_played_at: { value: "2026-04-05T00:00:00Z", modifier: LESS_THAN }
+  NOTE: null last_played_at is included in LESS_THAN results
+
+Criterion D: Small + Old + Unrated (post-API Python filter for size)
+  is_missing: "rating"
+  created_at: { value: "2026-02-05T00:00:00Z", modifier: LESS_THAN }
+  files: size < X bytes (filter in Python after fetching)
+
+Criterion E: High-value whitelist (do NOT delete these)
+  o_counter: { value: 0, modifier: GREATER_THAN }  ← user orgasmed
+
+IMPLEMENTATION STRATEGY:
+───────────────────────
+1. Call findScenes with criteria → Get paginated list
+2. Extract scene IDs + metadata
+3. Apply Python validation logic (e.g., confirm size threshold, whitelist o_counter>0)
+4. Execute sceneDestroy mutation for each approved scene
+5. Log deleted scene IDs (audit trail)
+
+FILTER MODIFIERS AVAILABLE (full list):
+──────────────────────────────────────
+  EQUALS, NOT_EQUALS
+  GREATER_THAN, LESS_THAN
+  IS_NULL, NOT_NULL  (note: IS_NULL broken for timestamp fields)
+  INCLUDES_ALL, INCLUDES, EXCLUDES
+  MATCHES_REGEX, NOT_MATCHES_REGEX
+  BETWEEN (requires value + value2), NOT_BETWEEN
+
+DATE/TIMESTAMP FORMAT: ISO 8601 — "YYYY-MM-DDTHH:MM:SSZ" for timestamps
+DATE FORMAT: "YYYY-MM-DD" for DateCriterionInput (scene.date field only)
+
+PAGINATION:
+───────────
+  per_page: 25-100 (recommended: 50)
+  page: 1, 2, 3, ...
+  Returns count + array of scenes
+
+GRAPHQL ENDPOINT:
+─────────────────
+  http://localhost:9999/graphql  (or configured host/port)
+
+AUTHENTICATION:
+───────────────
+  Include session cookie or API key in HTTP headers
+  (details provided via plugin stdin)
+
+DOCUMENTATION FILES:
+────────────────────
+✓ .squad/agents/roy/history.md              — Full API schema reference
+✓ .squad/agents/roy/example_queries.md      — Working query examples
+✓ .squad/agents/roy/API_SUMMARY.txt         — This file
+✓ .squad/decisions/roy-graphql-findings.md  — Key findings for team
+✓ .squad/skills/stashapp-graphql/SKILL.md   — Reusable implementation guide
+
+FOR QUESTIONS: See roy/history.md "Learnings" section
+FOR IMPLEMENTATION: See example_queries.md + SKILL.md
+FOR DECISIONS: See decisions/roy-graphql-findings.md
+
+================================================================================
