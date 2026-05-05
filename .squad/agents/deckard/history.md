@@ -205,3 +205,65 @@ Delivered all five architectural artifacts:
 - Criteria: OR semantics (any match = candidate)
 - Output: `{output: {mode, candidates|deleted, failed, summary}, error}`
 - `dry_run: true` is the default safety catch
+
+---
+
+## 2026-05-05T09:16:52+02:00 — Architecture Pivot: Config in Stash UI via settings: block
+
+### Directive
+
+smathev directed: all plugin configuration must be managed inside StashApp's UI.
+No `stash_deleter_config.yml`. No post-install file editing.
+
+### Research findings
+
+Fetched and analysed:
+- https://docs.stashapp.cc/in-app-manual/plugins/
+- DupFileManager.yml and DupFileManager.py (community plugin, production use)
+- stash-scheduler.yml and stash_scheduler.py (community plugin, production use)
+
+**Confirmed capabilities:**
+
+1. `settings:` block in manifest is real and supported. Types: BOOLEAN, NUMBER, STRING.
+   Fields render in Settings > Plugins UI automatically.
+
+2. Settings are NOT injected into stdin. Plugin must call:
+   `configuration { plugins }` GraphQL query to read them.
+   The `server_connection` in stdin provides auth (scheme, port, session cookie).
+
+3. `ui.javascript` / `ui.css` exist for frontend injection — not needed.
+
+4. No SELECT/dropdown type. STRING with documented valid values is the workaround.
+
+### Decision
+
+Option D: settings fields only. `stash_deleter_config.yml` is removed entirely.
+
+### Artifacts delivered
+
+1. **`docs/CONFIG_DESIGN.md`** — Full design: chosen approach, all fields with types,
+   runtime flow, module impact table, open questions.
+
+2. **`stash_deleter.yml`** — Updated with `settings:` block (7 fields: dry_run,
+   deletion_scope, unrated_after_plays, low_rating_min_plays, low_rating_max_rating,
+   no_orgasm_after_plays, never_played_after_days).
+
+3. **`.squad/decisions/inbox/deckard-config-ui-decision.md`** — Decision record with
+   StashApp capability summary and full impact analysis for Rachael.
+
+### Key design point for Rachael
+
+`ConfigLoader` must change signature from `(plugin_dir: Path)` to
+`(graphql_client: GraphQLClient, plugin_id: str)`. The `stash_deleter_config.yml`
+file is deleted. Tests for config_loader must mock the GraphQL response.
+
+Criteria engine needs a guard: `0` for NUMBER fields = criterion disabled.
+
+### Roy confirmed GraphQL patterns
+
+Roy live-tested GraphQL Configuration query on sa.micro:
+- `query Configuration { configuration { plugins } }` confirmed working
+- Returns map: `plugin_id → settings_dict`
+- Auth via SessionCookie from stdin `server_connection`
+- Example: `{ "stash_deleter": { "dry_run": true, "deletion_scope": "db_only", ... } }`
+- Plugin ID derived from YAML filename: `stash_deleter.yml` → key `"stash_deleter"`

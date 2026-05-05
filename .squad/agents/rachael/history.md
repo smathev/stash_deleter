@@ -39,7 +39,7 @@ _Append new learnings below as work progresses._
 - `main.py` — composition root; reads stdin JSON, calls `plugin.run()`, writes stdout JSON; all exception → error JSON; no business logic
 - `plugin/__init__.py` — re-exports `run` from `plugin.runner`
 - `plugin/runner.py` — single entry point; stubs `run()` returning empty candidates
-- `plugin/config_loader.py` — stub `ConfigLoader` class
+- `plugin/config_loader.py` — stub `ConfigLoader` class ⚠️ **REDESIGNED (see config pivot below)**
 - `plugin/graphql_client.py` — stub `GraphQLClient` class (query + mutate)
 - `plugin/criteria_engine.py` — stub `CriteriaEngine` class (find_candidates + is_candidate)
 - `plugin/deletion_executor.py` — stub `DeletionExecutor` class (execute)
@@ -79,3 +79,72 @@ tests/test_deletion_executor.py — 0 tests (stub class only)
 3. **`criteria_engine` never imports `graphql_client`** — client passed as argument (DIP). No `if dry_run:` outside `deletion_executor`.
 4. **Stub `run()` returns `{"candidates": [], "summary": "Dry run: 0 candidates (stub)"}** — satisfies contract-shape tests without any real implementation.
 5. **Error contract enforced**: invalid JSON → `{"output": null, "error": "..."}`, missing `server_connection` → same. Never crashes without JSON response.
+
+---
+
+## Implementation Notes for Future Work
+
+### Module Responsibilities (SOLID SRP)
+
+1. **`main.py`** — Pure I/O orchestrator. Read stdin, catch all exceptions, return JSON with `output` and `error` keys. No business logic.
+
+2. **`plugin/runner.py`** — Composition root for business logic. Receives payload dict, orchestrates config_loader → criteria_engine → deletion_executor. Returns result dict for main.py to serialize.
+
+3. **`plugin/config_loader.py`** — Fetch + validate user configuration. ⚠️ **NEW**: Takes `(graphql_client, plugin_id)` instead of `(plugin_dir)`. Calls GraphQL Configuration query. Applies in-code defaults. Returns validated config dict.
+
+4. **`plugin/graphql_client.py`** — HTTP transport layer. Methods: `query(query_string) → response_dict`, `mutate(mutation_string) → response_dict`. Auth via SessionCookie from stdin. No retry logic (plugins timeout if slow).
+
+5. **`plugin/criteria_engine.py`** — Pure function: config dict → (graphql_client) → candidates list. No coupling to config_loader or deletion_executor. Filter builder and scene evaluation.
+
+6. **`plugin/deletion_executor.py`** — Execute or simulate deletions. Receives graphql_client (DIP). Respects `dry_run` flag. Returns deleted[] + failed[] + summary.
+
+### Test Infrastructure
+
+- `tests/fixtures/sample_payload.json` — realistic stdin with server_connection (scheme, port, cookie path) and args
+- `pytest.ini` — standard config (or none, use defaults)
+- No fixtures for StashApp GraphQL; mock with `unittest.mock.patch` or similar
+- Aim for >90% code coverage; red → green → refactor cycle per module
+
+### Key Design Patterns
+
+- **DIP (Dependency Injection)**: graphql_client passed to criteria_engine, deletion_executor
+- **No chained calls**: No `obj.method1().method2()` — breaks testability
+- **Guard clauses**: Early returns for error cases
+- **Output shape**: Always `{"output": {...}, "error": null}` or `{"output": null, "error": "..."}`
+
+---
+
+## 2026-05-05T09:16:52+02:00 — CONFIG PIVOT: File-based → In-app UI
+
+### Directive Impact
+
+**smathev:** All config must be in StashApp UI. NO YAML config file post-install.
+
+### `config_loader.py` Redesign Required
+
+**Old signature:** `ConfigLoader(plugin_dir: Path).load() -> dict`  
+**New signature:** `ConfigLoader(graphql_client: GraphQLClient, plugin_id: str).load() -> dict`
+
+**What changed:**
+1. Constructor takes GraphQL client (DIP) instead of file path
+2. `load()` calls `configuration { plugins }` query and extracts `plugins["stash_deleter"]`
+3. Apply in-code defaults (no YAML file)
+4. Validate `deletion_scope` string
+5. Return same-shaped dict (rest of stack unchanged)
+
+### `criteria_engine.py` Minor Change
+
+Guard on NUMBER fields: `0` = "criterion disabled" → skip filter
+
+### Test Changes
+
+`tests/test_config_loader.py` — Rewrite. Mock GraphQL response instead of file I/O.
+
+### Files Impacted
+
+- ✅ `stash_deleter.yml` — now has `settings:` block (7 fields); no external config file
+- 🗑️ `stash_deleter_config.yml` — DELETE (no longer used)
+- ⚠️ `plugin/config_loader.py` — Redesign (GraphQL instead of file)
+- ⚠️ `plugin/criteria_engine.py` — Add 0-check for NUMBER fields
+- ⚠️ `main.py` — Pass graphql_client to ConfigLoader
+- ⚠️ `tests/test_config_loader.py` — Rewrite (GraphQL mocks)
