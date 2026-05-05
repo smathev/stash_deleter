@@ -148,3 +148,54 @@ Guard on NUMBER fields: `0` = "criterion disabled" → skip filter
 - ⚠️ `plugin/criteria_engine.py` — Add 0-check for NUMBER fields
 - ⚠️ `main.py` — Pass graphql_client to ConfigLoader
 - ⚠️ `tests/test_config_loader.py` — Rewrite (GraphQL mocks)
+
+---
+
+## 2026-05-05T09:44:24+02:00 — GraphQLClient + ConfigLoader Implementation (TDD)
+
+### What Was Implemented
+
+**`plugin/graphql_client.py`** — Full HTTP transport layer:
+- `GraphQLError(Exception)` — custom exception with `.errors` attribute; raised when response contains `"errors"` key
+- `GraphQLClient.__init__` — stores scheme, port, session_cookie; builds `_base_url = f"{scheme}://localhost:{port}/graphql"`
+- `GraphQLClient.query` / `GraphQLClient.mutate` — both delegate to private `_post()` (no code duplication)
+- `_post()` — serialises body as JSON string (not dict), sets `Content-Type: application/json`, builds `Cookie` header from dict as `k=v; k=v`, calls `raise_for_status()` before parsing, raises `GraphQLError` on `"errors"` key, returns `response["data"]`
+
+**`plugin/config_loader.py`** — GraphQL config fetcher/validator:
+- `ConfigLoader.__init__` — stores `_client` and `_plugin_id`
+- `ConfigLoader.load()` — calls `{ configuration { plugins } }`, extracts `plugins.get(plugin_id, {})`, applies defaults (`"db_only"`, `[]`), validates scope, returns `{"deletion_scope": str, "rules": list}`
+- Uses `or` defaulting for missing/falsy values; raises `ValueError` with clear message including field name
+
+**`tests/test_graphql_client.py`** — 7 tests:
+- `test_builds_correct_url`, `test_query_sends_post_with_json_body`, `test_query_sends_cookie_header`
+- `test_query_returns_data_on_success`, `test_query_raises_graphql_error_on_errors_field`
+- `test_query_raises_on_http_error`, `test_mutate_uses_same_path_as_query`
+
+**`tests/test_config_loader.py`** — 6 tests:
+- `test_load_returns_deletion_scope_and_rules`, `test_load_defaults_deletion_scope_to_db_only`
+- `test_load_defaults_rules_to_empty_list`, `test_load_raises_on_invalid_deletion_scope`
+- `test_load_returns_all_rules_including_disabled`, `test_load_with_empty_plugin_config`
+
+### Test State (2026-05-05T09:44:24+02:00)
+
+```
+tests/test_main.py          — 5 PASSED (GREEN, unchanged)
+tests/test_config_loader.py — 6 PASSED (GREEN, new)
+tests/test_graphql_client.py — 7 PASSED (GREEN, new)
+tests/test_criteria_engine.py — 32 PASSED (GREEN, unchanged)
+Total: 50 passed
+```
+
+### Patterns Discovered / Decisions Made
+
+1. **`query` and `mutate` share `_post()`** — DRY; both methods are one-liners delegating to `_post()`. Avoids future drift if HTTP logic changes.
+
+2. **`json.dumps()` for body, not `json=` kwarg in requests** — The task spec and tests check `kwargs["data"]` (not `kwargs["json"]`), so body is manually serialised and passed as `data=`. This also makes the `Content-Type` header explicit.
+
+3. **`raise_for_status()` before `.json()`** — Prevents `ValueError` on non-JSON error bodies (e.g. 502 HTML responses from proxies). HTTP error takes precedence.
+
+4. **`or` defaulting pattern for config** — `raw.get("deletion_scope") or "db_only"` handles both missing key AND empty string in one expression. Consistent with KISS.
+
+5. **`_VALID_SCOPES` as a module-level set** — Enables O(1) lookup and makes the constraint self-documenting without a comment.
+
+6. **`ValueError` message includes field name** — `"Invalid deletion_scope ..."` so test can `match="deletion_scope"` and the error is immediately actionable.
