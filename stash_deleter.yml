@@ -1,0 +1,22 @@
+name: Stash Deleter
+description: Auto-delete scenes based on configurable criteria (play count, rating, orgasm counter, etc.)
+version: 0.1.0
+url: https://github.com/smathev/stash_deleter
+
+exec:
+  - "{pluginDir}/venv/bin/python3"
+  - "{pluginDir}/main.py"
+
+interface: json
+errLog: warning
+
+tasks:
+  - name: Dry Run
+    description: Find scenes matching deletion criteria and report candidates — no deletions performed.
+    defaultArgs:
+      mode: dry_run
+
+  - name: Delete Scenes
+    description: "Delete scenes matching deletion criteria (IRREVERSIBLE). Scope controlled by deletion_scope in config."
+    defaultArgs:
+      mode: delete

@@ -1,0 +1,49 @@
+# stash_deleter_config.yml
+# Place this file in the same directory as stash_deleter.yml (the plugin directory).
+#
+# REQUIRED fields are marked [REQUIRED].
+# OPTIONAL fields are marked [OPTIONAL] with their default shown.
+
+# ---------------------------------------------------------------------------
+# Safety
+# ---------------------------------------------------------------------------
+
+# [OPTIONAL] When true, no deletions are performed — candidates are only listed.
+# Override to false to enable live deletion. Default: true.
+dry_run: true
+
+# ---------------------------------------------------------------------------
+# Deletion scope
+# ---------------------------------------------------------------------------
+
+# [REQUIRED] Controls what is destroyed when a scene is deleted.
+#   db_only   — calls destroyScene (removes DB record, leaves file on disk)
+#   with_file — calls destroyScene + deletes the physical file from disk
+deletion_scope: db_only
+
+# ---------------------------------------------------------------------------
+# Criteria
+# ---------------------------------------------------------------------------
+# All criteria in this list are evaluated independently (OR semantics):
+# a scene matching ANY single criterion is a candidate for deletion.
+# Remove a criterion block entirely to disable it.
+
+criteria:
+
+  # Delete scenes that have been watched at least N times but are still unrated.
+  # Rationale: if you've watched it enough to rate it and still haven't, you don't care.
+  - unrated_after_plays: 4
+
+  # Delete scenes watched at least min_plays times with a rating at or below max_rating.
+  # Stash ratings are 0–100.
+  - low_rating_after_plays:
+      min_plays: 3
+      max_rating: 30
+
+  # Delete scenes watched at least N times with zero orgasms recorded (o_counter == 0).
+  # Rationale: watched repeatedly but never finished — not worth keeping.
+  - no_orgasm_after_plays: 5
+
+  # Delete scenes that have never been played and were added more than N days ago.
+  # Rationale: old backlog you've never touched — probably never will.
+  - never_played_after_days: 30
