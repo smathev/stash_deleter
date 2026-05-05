@@ -28,3 +28,54 @@ Ready to implement deletion criteria validator and sceneDestroy executor.
 
 ## Learnings
 _Append new learnings below as work progresses._
+
+---
+
+## 2026-05-05T09:16:52+02:00 — Project Skeleton + TDD Bootstrap
+
+### What Was Created
+
+**Source files:**
+- `main.py` — composition root; reads stdin JSON, calls `plugin.run()`, writes stdout JSON; all exception → error JSON; no business logic
+- `plugin/__init__.py` — re-exports `run` from `plugin.runner`
+- `plugin/runner.py` — single entry point; stubs `run()` returning empty candidates
+- `plugin/config_loader.py` — stub `ConfigLoader` class
+- `plugin/graphql_client.py` — stub `GraphQLClient` class (query + mutate)
+- `plugin/criteria_engine.py` — stub `CriteriaEngine` class (find_candidates + is_candidate)
+- `plugin/deletion_executor.py` — stub `DeletionExecutor` class (execute)
+
+**Test files:**
+- `tests/__init__.py`
+- `tests/test_main.py` — full outside-in boundary test suite (5 tests)
+- `tests/test_config_loader.py` — stub class, no methods yet
+- `tests/test_graphql_client.py` — stub class, no methods yet
+- `tests/test_criteria_engine.py` — stub class, no methods yet
+- `tests/test_deletion_executor.py` — stub class, no methods yet
+- `tests/fixtures/sample_payload.json` — realistic StashApp stdin fixture
+
+**Infra:**
+- `venv/` — Python 3.14.4 venv with `pytest` + `requests`
+
+### Test State (2026-05-05T09:16:52+02:00)
+
+```
+tests/test_main.py — 5 PASSED (GREEN)
+  ✅ test_dry_run_returns_valid_json_with_output_key
+  ✅ test_dry_run_output_has_candidates_and_summary
+  ✅ test_delete_run_returns_valid_json
+  ✅ test_malformed_stdin_returns_error_key
+  ✅ test_missing_server_connection_returns_error
+
+tests/test_config_loader.py    — 0 tests (stub class only)
+tests/test_graphql_client.py   — 0 tests (stub class only)
+tests/test_criteria_engine.py  — 0 tests (stub class only)
+tests/test_deletion_executor.py — 0 tests (stub class only)
+```
+
+### Key Structural Decisions
+
+1. **`plugin/__init__.py` imports `plugin.runner.run`** — main.py calls `plugin.run(payload)`, not an internal class. Single entry point, no coupling to internals.
+2. **`plugin/runner.py` owns orchestration** — criteria_engine, config_loader, graphql_client, deletion_executor will be wired here. main.py stays pure I/O.
+3. **`criteria_engine` never imports `graphql_client`** — client passed as argument (DIP). No `if dry_run:` outside `deletion_executor`.
+4. **Stub `run()` returns `{"candidates": [], "summary": "Dry run: 0 candidates (stub)"}** — satisfies contract-shape tests without any real implementation.
+5. **Error contract enforced**: invalid JSON → `{"output": null, "error": "..."}`, missing `server_connection` → same. Never crashes without JSON response.

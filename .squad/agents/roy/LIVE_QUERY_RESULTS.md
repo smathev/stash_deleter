@@ -1,7 +1,7 @@
 # Roy — Live GraphQL Query Results
 
 **Generated:** 2026-05-05T08:32:00+02:00  
-**Endpoint:** https://sa.micro/graphql  
+**Endpoint:** <https://sa.micro/graphql>  
 **Method:** Live curl queries against running StashApp instance
 
 ---
@@ -35,7 +35,8 @@ Previous documentation was **wrong**. Here is the truth, confirmed from live API
 **Created in library:** 2025-05-04T12:32:44+02:00  
 **Last updated:** 2026-03-20T13:28:17+01:00
 
-### Playback Fields:
+### Playback Fields
+
 | Field | Value |
 |-------|-------|
 | `play_count` | **3** |
@@ -47,7 +48,8 @@ Previous documentation was **wrong**. Here is the truth, confirmed from live API
 | `play_duration` | `172` seconds cumulative |
 | `rating100` | `null` (unrated) |
 
-### File:
+### File
+
 | Field | Value |
 |-------|-------|
 | `id` | `7404` |
@@ -73,7 +75,8 @@ Previous documentation was **wrong**. Here is the truth, confirmed from live API
 **Created in library:** 2026-03-05T22:44:49+01:00  
 **Last updated:** 2026-03-20T13:26:19+01:00
 
-### Playback Fields:
+### Playback Fields
+
 | Field | Value |
 |-------|-------|
 | `play_count` | **3** |
@@ -85,7 +88,8 @@ Previous documentation was **wrong**. Here is the truth, confirmed from live API
 | `play_duration` | `495` seconds cumulative |
 | `rating100` | **60** (rated) |
 
-### File:
+### File
+
 | Field | Value |
 |-------|-------|
 | `id` | `20830` |
@@ -111,7 +115,8 @@ Previous documentation was **wrong**. Here is the truth, confirmed from live API
 **Created in library:** 2025-05-04T12:15:24+02:00  
 **Last updated:** 2025-06-18T20:30:57+02:00
 
-### Playback Fields:
+### Playback Fields
+
 | Field | Value |
 |-------|-------|
 | `play_count` | **5** |
@@ -123,7 +128,8 @@ Previous documentation was **wrong**. Here is the truth, confirmed from live API
 | `play_duration` | `356` seconds cumulative |
 | `rating100` | `null` (unrated) |
 
-### File:
+### File
+
 | Field | Value |
 |-------|-------|
 | `id` | `90` |
@@ -143,16 +149,20 @@ Previous documentation was **wrong**. Here is the truth, confirmed from live API
 ## 5. Filter Query Results
 
 ### A) Scenes with o_counter > 0 (had orgasms)
+
 ```graphql
 findScenes(scene_filter: { o_counter: { value: 0, modifier: GREATER_THAN } }, filter: { per_page: 5 })
 ```
+
 **Result: 1 total scene**  
 Only scene 3105 ("Break the Internet") — o_counter = 1, rating100 = null, last_played_at = 2026-03-13.
 
 ### B) Unrated scenes — using `is_missing: "rating"`
+
 ```graphql
 findScenes(scene_filter: { is_missing: "rating" }, filter: { per_page: 5 })
 ```
+
 **Result: 2,888 total scenes** — huge portion of the library is unrated.  
 Sample: ids 13, 43 ("Puppet Master #09"), 44, 45, 50 — all have rating100 = null.  
 Note: `play_count` varies even among unrated scenes (id 43 has play_count=1, id 50 has play_count=5).
@@ -160,29 +170,37 @@ Note: `play_count` varies even among unrated scenes (id 43 has play_count=1, id 
 > ⚠️ **Note:** The `rating100: { value: 1, modifier: LESS_THAN }` filter returned 0 results because null ratings are NOT treated as < 1 by the IntCriterion — use `is_missing: "rating"` instead.
 
 ### C) Scenes never played (play_count = 0)
+
 ```graphql
 findScenes(scene_filter: { play_count: { value: 0, modifier: EQUALS } }, filter: { per_page: 5 })
 ```
+
 **Result: 2,115 total scenes** — significant number never played.  
 Sample: ids 13, 77, 81, 109, 116 — all play_count=0, all unrated, last_played_at=null.
 
 ### D) Scenes with last_played_at before 2026-01-01
+
 ```graphql
 findScenes(scene_filter: { last_played_at: { value: "2026-01-01T00:00:00Z", modifier: LESS_THAN } }, filter: { per_page: 5 })
 ```
+
 **Result: 2,556 total scenes**  
 ⚠️ **IMPORTANT BEHAVIOR:** Scenes with `last_played_at = null` (never played) ARE INCLUDED in this result. The `LESS_THAN` filter treats null as "less than" any value. This means filtering by `last_played_at < X` catches both "never played" and "played long ago."
 
 ### E) IS_NULL modifier behavior for last_played_at
+
 ```graphql
 findScenes(scene_filter: { last_played_at: { value: "", modifier: IS_NULL } })
 ```
+
 **Result: 0 scenes** — IS_NULL modifier does NOT work for TimestampCriterionInput. Use `LESS_THAN` with an early date instead (which implicitly captures nulls).
 
 ### F) play_count BETWEEN 1 and 3
+
 ```graphql
 findScenes(scene_filter: { play_count: { value: 1, value2: 3, modifier: BETWEEN } }, filter: { per_page: 5 })
 ```
+
 **Result: 834 scenes** — BETWEEN modifier works correctly with value + value2.
 
 ---
@@ -249,6 +267,7 @@ Complete list of filterable fields, with their input type:
 ## 7. Corrected Query Patterns (Ready to Use)
 
 ### Pattern A: Find unrated scenes with low play count (deletion candidates)
+
 ```graphql
 {
   findScenes(
@@ -274,6 +293,7 @@ Complete list of filterable fields, with their input type:
 ```
 
 ### Pattern B: Find scenes not played since a cutoff date (includes never-played)
+
 ```graphql
 {
   findScenes(
@@ -294,9 +314,11 @@ Complete list of filterable fields, with their input type:
   }
 }
 ```
+
 > ⚠️ This includes scenes with `last_played_at = null` (never played). If you want ONLY never-played, combine with `play_count: { value: 0, modifier: EQUALS }`.
 
 ### Pattern C: Find never-played, unrated scenes
+
 ```graphql
 {
   findScenes(
@@ -321,6 +343,7 @@ Complete list of filterable fields, with their input type:
 ```
 
 ### Pattern D: Find scenes with o_counter > 0 (user engaged enough to orgasm)
+
 ```graphql
 {
   findScenes(
@@ -341,9 +364,11 @@ Complete list of filterable fields, with their input type:
   }
 }
 ```
+
 > Use this as a **whitelist** — scenes with o_counter > 0 are valued and should NOT be deleted.
 
 ### Pattern E: Combined multi-criterion deletion candidate query
+
 ```graphql
 {
   findScenes(
@@ -371,6 +396,7 @@ Complete list of filterable fields, with their input type:
 ```
 
 ### Pattern F: Full scene metadata fetch (before deletion, for audit)
+
 ```graphql
 {
   findScene(id: "SCENE_ID") {
@@ -410,13 +436,15 @@ Complete list of filterable fields, with their input type:
 
 ## 8. Unknown/Missing Fields & Behavioral Notes
 
-### Fields That Do NOT Exist (expected vs actual):
+### Fields That Do NOT Exist (expected vs actual)
+
 | Expected | Reality |
 |----------|---------|
 | `play_count` as o_counter | `o_counter` is orgasms; `play_count` is separate |
 | `rating` (0-5 star) | `rating100` (0-100 scale) |
 
-### Fields That Exist But Weren't Previously Documented:
+### Fields That Exist But Weren't Previously Documented
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `play_history` | [Time]! | Exact timestamps of each play |
@@ -432,7 +460,8 @@ Complete list of filterable fields, with their input type:
 | `groups` | [Group]! | Group associations |
 | `custom_fields` | Map | Arbitrary key-value metadata |
 
-### Behavioral Gotchas:
+### Behavioral Gotchas
+
 1. **`is_missing: "rating"` works; `is_missing: "last_played_at"` does NOT** — "invalid is_missing field" error
 2. **`last_played_at LESS_THAN <date>` includes null values** — scenes never played come through this filter
 3. **`play_count EQUALS 0` cleanly finds never-played scenes** — preferred over IS_NULL on last_played_at
@@ -445,7 +474,7 @@ Complete list of filterable fields, with their input type:
 ## 9. CriterionModifier Enum — All Values
 
 | Value | Meaning |
-|-------|---------|
+| ----- | --------- |
 | `EQUALS` | = |
 | `NOT_EQUALS` | != |
 | `GREATER_THAN` | > |
@@ -465,6 +494,7 @@ Complete list of filterable fields, with their input type:
 ## 10. VideoFile Type Fields (from VideoFile introspection)
 
 All fields are NON_NULL unless noted:
+
 - `id` (ID!), `path` (String!), `basename` (String!), `parent_folder` (Folder!)
 - `zip_file` (BasicFile — nullable), `mod_time` (Time!), `size` (Int64!)
 - `fingerprint` (String — nullable), `fingerprints` ([Fingerprint]!)

@@ -1,0 +1,24 @@
+{
+  "server_connection": {
+    "Scheme": "http",
+    "Port": 9999,
+    "SessionCookie": {
+      "Name": "session",
+      "Value": "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz",
+      "Path": "/",
+      "Domain": "localhost",
+      "MaxAge": 0,
+      "Secure": false,
+      "HttpOnly": true,
+      "SameSite": 0,
+      "Expires": "0001-01-01T00:00:00Z",
+      "Raw": "session=abc123def456ghi789jkl012mno345pqr678stu901vwx234yz; Path=/; HttpOnly",
+      "Unparsed": null
+    },
+    "Dir": "/home/user/.stash",
+    "PluginDir": "/home/user/.stash/plugins/stash_deleter"
+  },
+  "args": {
+    "mode": "dry_run"
+  }
+}
