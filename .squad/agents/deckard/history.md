@@ -167,7 +167,7 @@ stash_deleter/
     └── test_deletion_executor.py
 ```
 
-#### Open Questions (as of 2026-05-05)
+#### Open Questions (as of 2026-05-05 — superseded by later decisions)
 
 1. One task with `mode` arg vs. two separate tasks (`dry_run` task + `delete` task)?
 2. What does `output` contain? Status string only, or structured list of candidates (scene IDs, titles, sizes)?
@@ -259,6 +259,121 @@ file is deleted. Tests for config_loader must mock the GraphQL response.
 
 Criteria engine needs a guard: `0` for NUMBER fields = criterion disabled.
 
+---
+
+## 2026-05-05T09:27:26+02:00 — Dry Run UX: Tag-based output display
+
+### Question from smathev
+
+How can dry run results be presented to the user? Task log output is not readable for many scenes.
+
+### Research
+
+Fetched and analysed:
+- https://docs.stashapp.cc/in-app-manual/plugins/ (official plugin docs, full page)
+- Roy's LIVE_QUERY_RESULTS.md — Plugin Settings API section
+
+**Key findings:**
+1. `output` field → written at DEBUG log level. Invisible unless debug logging is explicitly enabled by the user.
+2. **No notification/alert/popup system** exists for plugins — not documented anywhere.
+3. `ui.assets` serves static files from plugin dir at `/plugin/{pluginID}/assets/` but Stash has no built-in markdown or HTML renderer.
+4. `ui.javascript` can inject JS for custom UI — adds complexity, YAGNI for v1.
+5. Tags are a first-class Stash concept. `sceneUpdate` mutation with `tag_ids` is confirmed working (Roy's session). `tagCreate` mutation also available.
+6. DupFileManager has a `zzdryRun` BOOLEAN setting in its manifest — Roy confirmed this but the community scripts repo was inaccessible for detail on what it outputs.
+
+### Decision
+
+**Option E: Tag candidates** — plugin adds `stash-deleter:candidate` tag to each matching scene during dry run. User reviews in scene browser.
+
+KISS: no new UI surface. YAGNI: Stash's scene browser is already the right tool. Reversible. Actionable.
+
+### Output contract changes (dry run)
+
+- Remove `candidates` array from output (was going to debug log, not useful there)
+- Add: `candidate_count`, `total_size_bytes`, `candidate_tag`, `candidate_tag_id`
+- Delete run: must call `clear_candidate_tags()` first to clean up stale tags
+
+### Artifacts delivered
+
+1. **`docs/DRY_RUN_OUTPUT.md`** — full design: UX flow, contract changes, Rachael's implementation checklist, GraphQL mutations needed.
+2. **`.squad/decisions/inbox/deckard-dry-run-display.md`** — decision record for the team.
+
+### Impact on Rachael
+
+Three new methods in `deletion_executor.py`:
+- `_ensure_candidate_tag()` — idempotent tag create
+- `tag_candidates(scenes)` — add tag to each candidate (merge, don't overwrite)
+- `clear_candidate_tags()` — clean up on delete run start
+
+---
+
+## 2026-05-05T09:27:26+02:00 — Dry Run UX Design: Candidate Shape + Output Presentation Options
+
+### Work completed
+
+Designed candidate data shape, assessed five output presentation options, recommended a primary approach.
+
+### Candidate Scene Data Shape
+
+Full schema:
+```json
+{
+  "id": "42",
+  "title": "...",
+  "path": "/data/videos/scene.mp4",
+  "size_bytes": 2147483648,
+  "size_human": "2.00 GB",
+  "duration_seconds": 3600.0,
+  "play_count": 5,
+  "o_counter": 0,
+  "rating100": null,
+  "last_played_at": "2025-06-01T12:00:00Z",
+  "matched_criteria": ["no_orgasm_after_plays"],
+  "reason": "Watched 5×, never rated, no orgasms"
+}
+```
+
+Key design notes:
+- `play_count` and `o_counter` are always separate fields (locked decision from Roy's corrections)
+- `rating100: null` = unrated (not 0)
+- `last_played_at: null` = never played
+- `reason` is computed human-readable summary for job log / display
+
+### Options Assessed
+
+| Option | Summary | Verdict |
+|---|---|---|
+| 1: Job log | Format output as text table in Tasks log | Fallback |
+| 2: Results file | Write .md/.json to PluginDir | Skip v0.1 |
+| 3: JS injection | Modal via ui.javascript | Deferred (pending Roy) |
+| 4: Tag candidates | Tag scenes with `stash_deleter:candidate` | **Primary** |
+| 5: Toast/notification | Pop summary via notification mutation | Complement (pending Roy) |
+
+### Decision
+
+**Primary: Option 4 — tag all candidate scenes with `stash_deleter:candidate`.**
+
+After dry run:
+1. Remove tag from previously-tagged scenes (cleanup)
+2. Tag all current candidates
+3. User filters Scenes view by tag to review
+
+Uses Stash's own UI, no frontend work, natural review-confirm workflow, reversible, self-documenting.
+
+**Fallback: Option 1** — formatted text table in job log. Always available, zero extra work.
+
+### Artifacts delivered
+
+1. **`docs/DRY_RUN_UX.md`** — Full design: candidate schema, all five options with pros/cons, recommendation, architectural impact, open questions.
+2. **`.squad/decisions/inbox/deckard-dry-run-ux-options.md`** — Decision record for team.
+
+### Open questions waiting on Roy
+
+- Does `createNotification` / toast mutation exist? (Option 5)
+- What JS APIs are available in `ui.javascript` scope? (Option 3)
+- Does `sceneUpdate` accept partial tag assignment or requires full list? (Option 4 impl)
+- Are there permission guards on `tagCreate` / `sceneUpdate`? (Option 4 risk)
+
 ### Roy confirmed GraphQL patterns
 
 Roy live-tested GraphQL Configuration query on sa.micro:
@@ -267,3 +382,102 @@ Roy live-tested GraphQL Configuration query on sa.micro:
 - Auth via SessionCookie from stdin `server_connection`
 - Example: `{ "stash_deleter": { "dry_run": true, "deletion_scope": "db_only", ... } }`
 - Plugin ID derived from YAML filename: `stash_deleter.yml` → key `"stash_deleter"`
+
+---
+
+## 2026-05-05T09:36:08+02:00 — Multi-Ruleset Architecture: JS Plugin Page in v1 Scope
+
+### Directive
+
+smathev reversed the "defer JS" decision. Multiple named rule sets are required in v1.
+The flat `settings:` block cannot represent dynamic named rule sets — confirmed design
+dead end. JS plugin page is now in scope.
+
+### Work completed
+
+Delivered all six tasks:
+
+1. **Rule set data model** — JSON structure for `configuration.plugins["stash_deleter"]`:
+   - Top-level: `deletion_scope` (string) + `rules` (array)
+   - Per-rule: `name`, `label`, `enabled`, and up to six optional criteria fields
+   - `name` becomes tag suffix: `stash-deleter:candidate:{name}`
+   - `null` / absent criteria are ignored (no `0`-means-disabled ambiguity)
+
+2. **JS component design** — `main.js` responsibilities:
+   - `PluginApi.register.route("/stash_deleter", RulesetManager)`
+   - RulesetManager: rules table, add/edit/delete modal, run buttons
+   - Reads config via `configuration { plugins }` query
+   - Saves via `configurePlugin(plugin_id: "stash_deleter", input: {...})`
+   - Run buttons call `runPluginOperation`; results shown inline
+   - Reference: DupFileManager pattern (confirmed working on dev instance by Roy)
+
+3. **`config_loader.py` contract** — updated stub:
+   - New signature: `ConfigLoader(graphql_client, plugin_id: str)`
+   - Returns `{ deletion_scope, rules[] }` — flat criteria fields gone
+   - Defaults: `deletion_scope = "db_only"`, `rules = []`
+
+4. **`deletion_executor.py` contract** — updated stub:
+   - New API: `run_rules(rules, mode)` iterates enabled rules
+   - `clear_candidate_tags()` removes all `stash-deleter:candidate:*` before live run
+   - `dry_run mode`: find candidates → tag with `stash-deleter:candidate:{name}`
+   - `delete mode`: clear tags first → find candidates → delete
+
+5. **`stash_deleter.yml`** — manifest updated:
+   - Removed entire `settings:` block (7 flat fields gone)
+   - Added `ui: javascript: [main.js]`
+   - `exec`, `interface`, `tasks` unchanged
+
+6. **Documentation and decisions**:
+   - `docs/CONFIG_DESIGN.md` — fully rewritten for multi-ruleset architecture
+   - `.squad/decisions/inbox/deckard-multi-ruleset-architecture.md` — decision record
+
+### Key decisions locked
+
+- Config format: `{ deletion_scope, rules[] }` — no flat criteria fields
+- Tag pattern: `stash-deleter:candidate:{rule_name}` (one tag per rule per scene)
+- JS in v1 scope: confirmed by smathev
+- `clear_candidate_tags()` clears ALL candidate tags (wildcard pattern) before live delete
+- Criteria fields: `null` = disabled (replaces `0` = disabled from flat-field era)
+- Each rule produces an independent set of candidates and an independent tag
+
+### Impact on Rachael
+
+Full redesign of `config_loader.py` and `deletion_executor.py`. Stubs updated.
+`criteria_engine.find_candidates(rule)` must accept a single rule dict.
+New file: `main.js` (JS frontend — new scope, assign to appropriate agent).
+Tests for config_loader must mock GraphQL returning rule array shape.
+
+
+---
+
+## 2026-05-05T07:36:08Z — Multi-Ruleset Architecture Final Approval & Team Coordination (Scribe Consolidation)
+
+### Architecture Status: FULLY LOCKED
+
+All team investigations completed and consolidated:
+
+1. **Roy-1 findings** (plugin output display):
+   - Confirms: `runPluginOperation` returns stdout JSON synchronously
+   - Confirms: PluginApi.register.route("/stash_deleter") viable for custom page
+   - Confirms: DupFileManager pattern works in production
+
+2. **Roy-2 findings** (configurePlugin array storage):
+   - APPROVED: `rules[]` native JSON array support confirmed
+   - APPROVED: No serialization overhead; arrays round-trip cleanly
+   - IMPLICATION: Multi-ruleset data model is feasible as designed
+
+3. **Deckard-4** (dry run UX):
+   - Recommendation: Tag-based candidate display (Option 4)
+   - Rationale: Non-destructive, uses Stash's native UI, reversible
+
+4. **Deckard-5** (multi-ruleset architecture):
+   - Decision: JS plugin page for rule management
+   - Data model: `{ deletion_scope, rules[] }` format
+   - Tag pattern: `stash-deleter:candidate:{rule_name}`
+
+### Ready for Implementation
+
+- Manifest updated with `ui.javascript` block
+- `config_loader` and `deletion_executor` stubs updated
+- Integration points locked: GraphQL config fetch, tag operations, rule iteration
+- JS component (`main.js`) assigned for next session
