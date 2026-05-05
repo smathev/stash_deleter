@@ -503,3 +503,332 @@ All fields are NON_NULL unless noted:
 - `created_at` (Time!), `updated_at` (Time!)
 
 > Note: `size` is `Int64` — Python's `int` handles this natively, but be careful with any JavaScript or limited-integer environments.
+
+---
+
+## Plugin Settings API
+
+**Investigated:** 2026-05-05T09:16:52+02:00  
+**Purpose:** Determine whether plugin configuration can live entirely inside StashApp's UI, eliminating the `stash_deleter_config.yml` file.
+
+---
+
+### 1. Relevant GraphQL Queries
+
+| Query | Description |
+|-------|-------------|
+| `configuration { plugins }` | Returns `PluginConfigMap` — a map of `plugin_id → Map(String → Any)` containing all stored plugin settings |
+| `plugins { id name settings { name display_name description type } }` | Returns loaded plugins with their declared settings metadata |
+
+#### `configuration.plugins` live result (excerpt):
+```json
+{
+  "DupFileManager": { "mergeDupFilename": true, "zzObsoleteSettingsCheckVer2": true },
+  "cjCardTweaks": { "performerProfileCards": true },
+  "hotCards": { "home": true }
+}
+```
+
+#### `PluginConfigMap` scalar type:
+- Kind: SCALAR  
+- Description: `"A plugin ID -> Map (String -> Any map) map"`
+- Not a structured object — a free-form JSON map per plugin
+
+#### `PluginSetting` type (declared in YAML manifest):
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | String! | Setting key |
+| `display_name` | String | Human-readable label shown in UI |
+| `description` | String | Help text |
+| `type` | PluginSettingTypeEnum! | `STRING`, `NUMBER`, or `BOOLEAN` |
+
+---
+
+### 2. Relevant GraphQL Mutation
+
+```graphql
+mutation {
+  configurePlugin(plugin_id: ID!, input: Map!): Map
+}
+```
+
+- Description: **"overwrites the entire plugin configuration for the given plugin"**
+- `input` is a free-form `Map` (String → Any)
+- Returns the saved map
+- **Live test confirmed working**: writing `{test_key: "test_value", min_play_count: 3}` returned `{"min_play_count": 3, "test_key": "test_value"}`
+
+---
+
+### 3. How Settings Flow at Runtime (NOT via stdin args)
+
+Key finding: **Plugin settings are NOT injected via stdin `args`**.
+
+- `stdin args` carries only task invocation arguments (e.g. `{"mode": "dry_run"}`)
+- Plugin settings must be **actively fetched** at runtime by calling the GraphQL API
+
+**Confirmed pattern from DupFileManager/StashPluginHelper.py (line 257):**
+```python
+# At plugin init (after reading stdin for server_connection):
+self.PLUGIN_CONFIGURATION = self.get_configuration()["plugins"]
+# Then:
+if self.PLUGIN_ID in self.PLUGIN_CONFIGURATION:
+    self.pluginSettings.update(self.PLUGIN_CONFIGURATION[self.PLUGIN_ID])
+```
+
+So the correct read pattern for our plugin is:
+```python
+# 1. Read stdin to get server_connection (host, port, session cookie)
+# 2. Connect GraphQL client using that connection
+# 3. Call: { configuration { plugins } }
+# 4. Extract: plugins["stash_deleter"]  (keyed by plugin_id as declared in YAML)
+```
+
+---
+
+### 4. Community Plugin Pattern: settings: Block in YAML
+
+Both `DupFileManager` and `hotCards` use a `settings:` block in their `.yml` manifest. Stash renders this as a settings UI automatically.
+
+**DupFileManager.yml example (abbreviated):**
+```yaml
+settings:
+  mergeDupFilename:
+    displayName: Merge Duplicate Tags
+    description: Before deletion, merge metadata from duplicate.
+    type: BOOLEAN
+  matchDupDistance:
+    displayName: Match Duplicate Distance
+    description: (Default=0) Where 0=Exact, 1=High, 2=Medium, 3=Low
+    type: NUMBER
+  zvWhitelist:
+    displayName: White List
+    description: Comma-separated list of paths NOT to be deleted.
+    type: STRING
+  zzdryRun:
+    displayName: Dry Run
+    description: In dry run mode, files are NOT deleted.
+    type: BOOLEAN
+```
+
+**hotCards.yml example (abbreviated):**
+```yaml
+settings:
+  tagId:
+    displayName: Tag ID
+    description: Tag ID to match. Leave blank to disable.
+    type: STRING
+  threshold:
+    displayName: Rating Threshold
+    description: Rating threshold (0-5).
+    type: NUMBER
+  home:
+    displayName: Enable for the homepage
+    type: BOOLEAN
+```
+
+The YAML key under `settings:` becomes the key in `configuration.plugins[plugin_id]`.
+
+---
+
+### 5. Verdict
+
+**In-app settings configuration is fully feasible and well-supported in StashApp.**
+
+| Mechanism | Verdict |
+|-----------|---------|
+| `settings:` block in YAML manifest | ✅ Supported — Stash renders settings UI automatically |
+| Settings stored in Stash config | ✅ `configuration.plugins[plugin_id]` holds the values |
+| Reading settings at runtime | ✅ Call `{ configuration { plugins } }` via GraphQL, look up by plugin_id |
+| Writing settings via API | ✅ `configurePlugin(plugin_id, input: Map!)` mutation |
+| Settings injected via stdin args | ❌ No — args are task arguments only, not persisted settings |
+| `stash_deleter_config.yml` still needed | ❌ Not needed if settings move to StashApp UI |
+
+**Required changes to implement in-app settings:**
+1. Add `settings:` block to `stash_deleter.yml` — one entry per config key (min_play_count, min_rating, etc.)
+2. Plugin runtime: after connecting GraphQL, call `configuration { plugins }` and extract `plugins["stash_deleter"]`
+3. Remove dependency on `stash_deleter_config.yml`
+
+**⚠️ Plugin ID caveat**: The key in `configuration.plugins` matches the plugin `id` field in the YAML manifest. Our manifest uses `name: Stash Deleter` but does not declare an explicit `id`. Stash derives the plugin ID from the YAML filename (i.e., `stash_deleter` for `stash_deleter.yml`). Verify this matches what Stash uses before relying on `configuration.plugins["stash_deleter"]`.
+
+---
+
+## Dry Run Output Display
+
+**Investigated:** 2026-05-05T09:27:26+02:00  
+**Purpose:** Determine how to surface dry run candidate lists (20–100 scenes) to the user inside StashApp.
+
+---
+
+### 1. What the `logs` query returns
+
+**Live confirmed schema:**
+```
+LogEntry { time: Time!, level: LogLevel!, message: String! }
+LogLevel enum: Trace, Debug, Info, Progress, Warning, Error
+```
+
+**Accessible at:** StashApp UI → Settings → Logs  
+**Arguments:** None — returns all recent log entries, no filtering or pagination.
+
+**What plugin output goes there:**  
+When a Python plugin writes to stderr, Stash captures those lines and emits them as log entries prefixed `[Plugin / plugin_name]`. The log level matches what the plugin writes (Info, Debug, Error, etc.).
+
+**Visibility:** The Logs page is under Settings — not visible during normal browsing. A user would have to navigate there manually to see output.
+
+**Live log sample from this session:**  
+```
+[Error] [Plugin / DupFileManager] /root/.stash/plugins/community/DupFileManager/DupFileManager_report_config.py:349: SyntaxWarning: ...
+```
+
+**Verdict for dry run display:** ❌ Not user-friendly. Logs show up only in Settings > Logs. For a list of 20–100 candidates it is unreadable. Plugin output in logs is plain text with no structure. Not viable as the primary display method.
+
+---
+
+### 2. What the `jobQueue` / `findJob` API exposes
+
+**Live confirmed schema:**
+```
+Job { id: ID!, status: JobStatus!, subTasks: [String], description: String!, progress: Float, startTime: Time, endTime: Time, addTime: Time!, error: String }
+```
+
+**Key finding: The `Job` type has NO `output` or `result` field.**  
+When `runPluginTask` is called, it returns a job ID (String). The job runs asynchronously. The `Job` object tracks status and progress but does NOT capture the plugin's stdout/output. The plugin's structured `{"output": {...}, "error": null}` return value is **discarded** when run as a task.
+
+**Live query:** `jobQueue` returned `null` (empty queue).
+
+**Verdict for dry run display:** ❌ Job queue does not expose plugin output. Using `runPluginTask` for dry run means the output is lost. The job API is for status tracking, not result retrieval.
+
+---
+
+### 3. Notification / Toast API
+
+**Exhaustive check of all mutation fields** — searched for: `addMessage`, `notify`, `createNotification`, `popup`, `toast`, `alert`, `banner`.
+
+**Result: None found.** There is NO GraphQL mutation in StashApp that creates a notification, toast, or popup visible to the user. The full mutation list (80+ mutations) contains no such mechanism.
+
+**Verdict:** ❌ No native notification/toast API in StashApp GraphQL.
+
+---
+
+### 4. `runPluginOperation` — synchronous return of plugin output
+
+**Schema confirmed:**
+```graphql
+mutation runPluginOperation(plugin_id: ID!, args: Map): Any
+```
+
+**Key finding: Returns `Any` scalar — the raw plugin stdout JSON, immediately.**  
+This runs the plugin **synchronously** (not as a job). The plugin's stdout is returned directly in the GraphQL mutation response.
+
+**DupFileManager uses this pattern** (confirmed from live JS inspection):
+```javascript
+// DupFileManager JS plugin calls:
+mutation RunPluginOperation($plugin_id:ID!, $args:Map!) {
+  runPluginOperation(plugin_id: $plugin_id, args: $args)
+}
+// Gets back: the plugin's stdout JSON directly as a string
+var result = JSON.parse(AjaxData.responseJSON.data.runPluginOperation);
+```
+
+**Critical caveat:** The plugin's stdout for `runPluginOperation` is returned as a raw string (not parsed JSON). DupFileManager does `JSON.parse(result.replaceAll("'", '"'))`. Our plugin must return valid JSON on stdout.
+
+**Verdict for dry run:** ✅ **VIABLE — this is the key mechanism.** If the dry run is implemented as a `runPluginOperation` (not a task), the JS frontend can call it and receive the candidates list back directly in the response.
+
+---
+
+### 5. JS Plugin UI Injection via `ui.javascript`
+
+**Confirmed capabilities from live inspection of PluginApi:**
+
+| PluginApi method | Purpose |
+|---|---|
+| `PluginApi.register.route(path, component)` | Register a new page/route in the Stash SPA (e.g. `/plugin/stash_deleter`) |
+| `PluginApi.GQL` | Make GraphQL queries from JS (uses same session/auth) |
+| `PluginApi.React` | React instance for building components |
+| `PluginApi.components` | Stash UI component library |
+| `PluginApi.libraries.Bootstrap` | Bootstrap React components |
+| `PluginApi.patch.before(component, fn)` | Inject UI into existing Stash components |
+| `PluginApi.Event.addEventListener` | Listen for navigation events (e.g. `stash:location`) |
+
+**DupFileManager registers 10+ custom routes at `/plugin/DupFileManager*`**, each displaying a React page with buttons, status messages, and results.
+
+**Confirmed: a JS plugin CAN call `runPluginOperation` and display the result in a registered React route page.**
+
+This is the gold standard community pattern. DupFileManager does it end-to-end: custom route → JS button → `runPluginOperation` → parse response → display result in React component.
+
+**Verdict:** ✅ Full custom UI is feasible. A JS plugin file in the manifest `ui.javascript` can register a `/plugin/stash_deleter` page that calls the dry run operation and renders the candidates table.
+
+---
+
+### 6. PluginDir File Serving
+
+**Tested:** Files in the plugin directory are NOT served via HTTP.
+
+```
+GET /plugin/DupFileManager/assets/          → 404
+GET /plugin/DupFileManager/file/test.html   → 404
+```
+
+Only `/plugin/{id}/javascript` and `/plugin/{id}/css` are served. These are the compiled JS/CSS files declared in the manifest.
+
+DupFileManager's HTML reports are accessed via `file://` URLs on the local filesystem, NOT via HTTP. This means this approach only works if Stash and the browser are on the same machine.
+
+**Verdict for file scratchpad:** ⚠️ NOT viable for web-based display. Files in PluginDir are not HTTP-accessible. Could write a JSON file and have the JS plugin fetch it via a custom endpoint, but there is no such endpoint mechanism. This approach is a dead end unless StashApp adds a file-serving route.
+
+---
+
+### 7. `configurePlugin` as Scratchpad
+
+**Mutation confirmed:**
+```graphql
+mutation configurePlugin(plugin_id: ID!, input: Map!): Map
+```
+
+**Key insight:** A Python plugin can call `configurePlugin("stash_deleter", {"last_dry_run": [...]})` to write arbitrary data into its own plugin config slot. A JS frontend can then read this back via `{ configuration { plugins } }`.
+
+This creates an **asynchronous scratchpad pattern**:
+1. User runs "Dry Run" task (async via `runPluginTask`)
+2. Python writes candidates to `configurePlugin("stash_deleter", {"last_dry_run": [...]})`
+3. User navigates to `/plugin/stash_deleter` page
+4. JS reads `configuration { plugins }` → extracts `stash_deleter.last_dry_run` → renders table
+
+**Caveats:**
+- `configurePlugin` **overwrites the entire plugin config** — must merge existing settings before writing
+- Limit: `Map` scalar can store JSON. For 100 scenes with metadata, the payload may be large (but likely fine for a config store)
+- Config is NOT cleared after the actual delete run — need to clear `last_dry_run` manually
+
+**Verdict:** ✅ VIABLE as secondary pattern. Good for "run task then view results" flow. Simpler than synchronous `runPluginOperation` but requires merge-before-write discipline.
+
+---
+
+### 8. Verdict: Most Practical Approach
+
+**Question:** What's the most practical way to show the user a list of 20–100 deletion candidates?
+
+| Option | Mechanism | Verdict |
+|--------|-----------|---------|
+| A | `runPluginOperation` + JS route page | ✅ **BEST** — synchronous, direct, community-proven |
+| B | `configurePlugin` scratchpad + JS route | ✅ Good for async task pattern |
+| C | Logs (Settings > Logs) | ❌ Not user-friendly, unstructured, buried |
+| D | `runPluginTask` job queue | ❌ Output not exposed in Job API |
+| E | PluginDir file serving | ❌ Files not HTTP-accessible |
+| F | Notification/toast API | ❌ Does not exist |
+
+**Recommended approach: Option A — `runPluginOperation` + JS registered route**
+
+1. **Python plugin** exposes a `dry_run` operation mode (triggered via `runPluginOperation`, not `runPluginTask`)  
+   - Receives `args: { mode: "dry_run" }` via GraphQL
+   - Returns JSON on stdout: `{"output": {"candidates": [...], "summary": {...}}, "error": null}`
+   
+2. **JS plugin** (`ui.javascript` in manifest) registers a React route at `/plugin/stash_deleter`:
+   - Renders a "Run Dry Run" button
+   - On click, calls `runPluginOperation("stash_deleter", {mode: "dry_run"})` via `PluginApi.GQL`
+   - Receives the candidates JSON
+   - Renders a table: title, play_count, last_played_at, file size, path
+   - Offers a "Proceed to Delete" button that calls `runPluginTask` for the actual delete job
+
+3. **Bonus (optional)**: Also write results to `configurePlugin` scratchpad so results persist across page navigations.
+
+**This is exactly the pattern DupFileManager uses.** It is battle-tested and community-proven.
+
+**⚠️ Note on `runPluginOperation` vs task timeout:** Operation mode is synchronous and runs in the HTTP request context. For large libraries (2,888 unrated scenes), the findScenes query + filtering could take seconds. This is likely acceptable for a dry run that returns a candidate list (not doing N×API calls). Monitor for timeout issues if filtering is complex.

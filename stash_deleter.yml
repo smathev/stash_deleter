@@ -1,7 +1,15 @@
 name: Stash Deleter
-description: Auto-delete scenes based on configurable criteria (play count, rating, orgasm counter, etc.)
+description: Auto-delete scenes based on configurable named rule sets (play count, rating, orgasm counter, etc.)
 version: 0.1.0
 url: https://github.com/smathev/stash_deleter
+
+# ---------------------------------------------------------------------------
+# UI — JS plugin page manages rule sets via configurePlugin mutation.
+# No flat settings: block. All configuration is stored as a JSON rule array.
+# ---------------------------------------------------------------------------
+ui:
+  javascript:
+    - main.js
 
 exec:
   - "{pluginDir}/venv/bin/python3"
@@ -17,6 +25,6 @@ tasks:
       mode: dry_run
 
   - name: Delete Scenes
-    description: "Delete scenes matching deletion criteria (IRREVERSIBLE). Scope controlled by deletion_scope in config."
+    description: "Delete scenes matching deletion criteria (IRREVERSIBLE). Scope controlled by Deletion Scope setting."
     defaultArgs:
       mode: delete

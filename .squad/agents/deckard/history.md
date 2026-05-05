@@ -481,3 +481,84 @@ All team investigations completed and consolidated:
 - `config_loader` and `deletion_executor` stubs updated
 - Integration points locked: GraphQL config fetch, tag operations, rule iteration
 - JS component (`main.js`) assigned for next session
+
+---
+
+## 2026-05-05T09:44:24+02:00 — main.js Implementation: JS Plugin Page (Dry Run Only)
+
+### Work completed
+
+Wrote `main.js` — the full browser-side plugin page for Stash Deleter.
+
+**File:** `/home/smathev/git_dev/stash_deleter/main.js` (≈ 500 lines)
+
+### Architecture decisions made
+
+1. **Safety enforced at file level**: No delete button exists anywhere in `main.js`.
+   - Only `runPluginOperation(args: { mode: "dry_run" })` is called
+   - Prominent always-visible warning banner in the UI header
+   - Code comment at `PluginApi.register.route` call reiterates the constraint
+
+2. **IIFE wrapper** — entire file wrapped in `(function() { "use strict"; })()` to avoid
+   polluting global scope. Only `PluginApi.register.route` touches the global surface.
+
+3. **React.createElement throughout** — no JSX, no transpiler. Verbose but correct.
+   Kept a local alias `const e = React.createElement` per component to reduce noise.
+
+4. **Inline rule editor** — chose inline card over modal. Simpler state management,
+   no backdrop needed, consistent with Stash's own inline form patterns.
+   Editor appears below the rules table inside the same card.
+
+5. **Results normalisation** — `runPluginOperation` returns the plugin's raw stdout
+   as a string. Added try/catch JSON.parse with graceful fallback to display raw output
+   if the plugin returns non-JSON (e.g. during errors or misconfiguration).
+
+6. **Dry-run button gating** — button disabled when no enabled rules exist, with
+   explanatory text shown inline. Prevents pointless GraphQL calls.
+
+7. **Enable toggle on table rows** — click toggles `enabled` flag inline without
+   opening the editor. Keeps fast iteration workflow: enable/disable rules quickly,
+   save once.
+
+8. **Tag display in results** — shows `stash-deleter:candidate:{name}` from plugin
+   output with guidance text "filter Scenes by this tag to review". Uses Stash's
+   native scene browser as the review surface (as per deckard-dry-run-ux-options decision).
+
+### GraphQL surface used
+
+| Query/Mutation | Purpose |
+|---|---|
+| `configuration { plugins }` | Load saved config on mount |
+| `configurePlugin(plugin_id, input)` | Persist rule changes |
+| `runPluginOperation(plugin_id, args)` | Trigger Python backend (dry_run only) |
+
+### Config state shape
+
+```json
+{
+  "deletion_scope": "db_only",
+  "rules": [
+    {
+      "id": "rule_1746432264000",
+      "name": "low_rating",
+      "label": "Low Rating Scenes",
+      "enabled": true,
+      "min_play_count": 3,
+      "max_play_count": 0,
+      "require_no_rating": false,
+      "require_no_o_counter": false,
+      "days_on_disk_without_play": 0,
+      "max_rating100": 30
+    }
+  ]
+}
+```
+
+### Open items for next sprint
+
+- Delete button and `mode: "delete"` path — deferred per safety directive
+- Per-rule candidate links (deep-link into Stash scene browser filtered by tag)
+- Notification/toast after dry run completes (pending Roy's investigation of
+  `createNotification` GraphQL mutation)
+- `clear_candidate_tags()` flow — Python side clears stale tags before each dry run
+  (already in Rachael's scope via `deletion_executor.py`)
